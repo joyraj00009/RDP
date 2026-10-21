@@ -30,7 +30,7 @@ jobs:
         shell: powershell
         run: |
           $username = 'RDP'
-          $password = 'CHANGE_THIS_TO_A_NEW_STRONG_PASSWORD'
+          $password = 'Aa112233@'
           $securePass = ConvertTo-SecureString `
             $password -AsPlainText -Force
 
@@ -136,7 +136,7 @@ jobs:
         run: |
           Write-Host "RDP Address: $env:TAILSCALE_IP"
           Write-Host 'Username: RDP'
-          Write-Host 'Password: the password configured in the workflow.'
+          Write-Host 'Password is configured in the workflow.'
 
           while ($true) {
             Write-Host "[$(Get-Date)] Runner active"
