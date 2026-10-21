@@ -121,4 +121,3 @@ jobs:
               Write-Host "[$(Get-Date)] RDP Active"
               Start-Sleep -Seconds 300
           }
-```
