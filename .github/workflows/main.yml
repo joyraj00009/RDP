@@ -28,43 +28,47 @@ jobs:
 
       - name: Configure RDP User
         shell: powershell
-        env:
-          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) {
-            throw "Add RDP_PASSWORD in GitHub Actions secrets."
-          }
-
+          $username = 'RDP'
+          $password = 'CHANGE_THIS_TO_A_NEW_STRONG_PASSWORD'
           $securePass = ConvertTo-SecureString `
-            $env:RDP_PASSWORD -AsPlainText -Force
+            $password -AsPlainText -Force
 
-          $existingUser = Get-LocalUser -Name 'RDP' `
+          $existingUser = Get-LocalUser -Name $username `
             -ErrorAction SilentlyContinue
 
           if ($existingUser) {
-            Set-LocalUser -Name 'RDP' -Password $securePass
+            Set-LocalUser -Name $username -Password $securePass
           } else {
-            New-LocalUser -Name 'RDP' `
+            New-LocalUser -Name $username `
               -Password $securePass `
               -AccountNeverExpires
           }
 
           Add-LocalGroupMember -Group 'Remote Desktop Users' `
-            -Member 'RDP' -ErrorAction SilentlyContinue
+            -Member $username -ErrorAction SilentlyContinue
+
+          Write-Host 'RDP user configured successfully.'
+          Write-Host "Username: $username"
 
       - name: Install Tailscale
         shell: powershell
         run: |
           $msi = "$env:TEMP\tailscale.msi"
+
           Invoke-WebRequest `
             'https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi' `
             -OutFile $msi
 
-          Start-Process msiexec.exe `
+          $process = Start-Process msiexec.exe `
             -ArgumentList '/i', "`"$msi`"", '/quiet', '/norestart' `
-            -Wait
+            -Wait -PassThru
 
-          Remove-Item $msi -Force
+          Remove-Item $msi -Force -ErrorAction SilentlyContinue
+
+          if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
+            throw "Tailscale installation failed: $($process.ExitCode)"
+          }
 
       - name: Connect Tailscale
         shell: powershell
@@ -72,21 +76,35 @@ jobs:
           TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
-            throw "Add TAILSCALE_AUTH_KEY in GitHub Actions secrets."
+            throw 'Add TAILSCALE_AUTH_KEY in GitHub Actions secrets.'
           }
 
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
 
-          & $ts up --authkey="$env:TS_AUTHKEY" `
+          if (-not (Test-Path $ts)) {
+            throw 'Tailscale executable was not found.'
+          }
+
+          & $ts up `
+            --authkey="$env:TS_AUTHKEY" `
             --hostname="gh-runner-$env:GITHUB_RUN_ID"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Tailscale connection failed.'
+          }
 
           $tsIP = $null
 
           for ($i = 0; $i -lt 12 -and -not $tsIP; $i++) {
             Start-Sleep -Seconds 5
             $result = & $ts ip -4
+
             if ($LASTEXITCODE -eq 0 -and $result) {
-              $tsIP = ($result | Select-Object -First 1).Trim()
+              $candidate = ($result | Select-Object -First 1).Trim()
+
+              if ($candidate) {
+                $tsIP = $candidate
+              }
             }
           }
 
@@ -94,15 +112,18 @@ jobs:
             throw 'Could not obtain a Tailscale IP.'
           }
 
-          "TAILSCALE_IP=$tsIP" | Out-File `
-            -FilePath $env:GITHUB_ENV -Append
+          "TAILSCALE_IP=$tsIP" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Verify RDP
         shell: powershell
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+
           $test = Test-NetConnection `
-            -ComputerName $env:TAILSCALE_IP -Port 3389
+            -ComputerName $env:TAILSCALE_IP `
+            -Port 3389 `
+            -WarningAction SilentlyContinue
 
           if (-not $test.TcpTestSucceeded) {
             throw 'RDP port connectivity check failed.'
@@ -115,7 +136,8 @@ jobs:
         run: |
           Write-Host "RDP Address: $env:TAILSCALE_IP"
           Write-Host 'Username: RDP'
-          Write-Host 'Use the password saved in GitHub Secrets.'
+          Write-Host 'Password: the password configured in the workflow.'
+
           while ($true) {
             Write-Host "[$(Get-Date)] Runner active"
             Start-Sleep -Seconds 300
